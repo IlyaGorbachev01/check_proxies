@@ -129,7 +129,6 @@ def save_proxies(proxies: list[Proxy], file_path: Path) -> None:
     with file_path.open("w", encoding="utf-8") as file:
         for proxy in proxies:
             print(proxy.url, file=file)
-            file.write(f"{proxy.url}\n")
 
 
 async def main() -> None:
