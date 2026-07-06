@@ -16,8 +16,11 @@ DATA_DIR = Path("data")
 DEFAULT_INPUT_FILE = DATA_DIR / "all_proxies.txt"
 DEFAULT_OUTPUT_FILE = DATA_DIR / "working_proxies.txt"
 
-REMOTE_PROXY_LIST_URL = (
-    "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt"
+PROXY_LIST_URLS: tuple[str, ...] = (
+    "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
+    # CDN, который кэширует GitHub-репозитории.
+    # Работает в России, не редиректит на raw.githubusercontent.com.
+    "https://cdn.jsdelivr.net/gh/SoliSpirit/mtproto@master/all_proxies.txt",
 )
 
 DEFAULT_TIMEOUT = 5
@@ -37,9 +40,9 @@ class Proxy(NamedTuple):
 class LogLevel(Enum):
     """Уровни логирования для единообразного вывода."""
 
-    INFO = "ℹ️ "
+    INFO = "ℹ️  "
     SUCCESS = "✅ "
-    WARNING = "⚠️ "
+    WARNING = "⚠️  "
     ERROR = "❌ "
 
 
@@ -92,14 +95,38 @@ def parse_proxy(line: str) -> Proxy | None:
         return None
 
 
-def download_proxies(url: str, destination: Path) -> int:
-    """Скачивает файл и возвращает количество строк. Выбрасывает исключение при ошибке."""
+def download_proxies(urls: tuple[str, ...], destination: Path) -> int:
+    """
+    Пробует скачать файл по очереди из каждого URL.
+    Возвращает количество строк. Выбрасывает исключение, если все URL недоступны.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=30) as response:
-        content = response.read()
 
-    destination.write_bytes(content)
-    return content.decode("utf-8").count("\n") + 1
+    last_error: Exception | None = None
+
+    for attempt, url in enumerate(urls, start=1):
+        try:
+            Console.log(f"Попытка {attempt}/{len(urls)}: {url}")
+            with urllib.request.urlopen(url, timeout=30) as response:
+                content = response.read()
+
+            destination.write_bytes(content)
+            lines_count = content.decode("utf-8").count("\n") + 1
+            Console.log(
+                f"Файл сохранён: {destination.name} (строк: {lines_count})",
+                LogLevel.SUCCESS,
+            )
+            return lines_count
+        except Exception as e:
+            last_error = e
+            Console.log(
+                f"Не удалось ({type(e).__name__}): {e}",
+                LogLevel.WARNING,
+            )
+
+    raise ConnectionError(
+        f"Все попытки загрузки не удались. Последняя ошибка: {last_error}"
+    )
 
 
 def load_proxies_from_file(file_path: Path) -> tuple[list[Proxy], int]:
@@ -107,7 +134,7 @@ def load_proxies_from_file(file_path: Path) -> tuple[list[Proxy], int]:
     if not file_path.exists():
         raise FileNotFoundError(f"Файл не найден: {file_path}")
 
-    proxies = []
+    proxies: list[Proxy] = []
     invalid_count = 0
 
     with file_path.open("r", encoding="utf-8") as file:
@@ -150,7 +177,7 @@ async def check_all_proxies(
 ) -> list[Proxy]:
     """Проверяет все прокси и вызывает callback для обновления прогресса."""
     semaphore = asyncio.Semaphore(max_workers)
-    working_proxies = []
+    working_proxies: list[Proxy] = []
     total = len(proxies)
 
     tasks = [check_proxy(p, semaphore, timeout) for p in proxies]
@@ -230,10 +257,8 @@ async def main() -> None:
                 args.input.unlink()
 
             Console.log("Скачивание актуального списка с GitHub...", LogLevel.INFO)
-            lines_count = download_proxies(REMOTE_PROXY_LIST_URL, args.input)
-            Console.log(
-                f"Скачано {lines_count} строк в {args.input.name}", LogLevel.SUCCESS
-            )
+            lines_count = download_proxies(PROXY_LIST_URLS, args.input)
+            Console.log(f"Скачано строк: {lines_count}", LogLevel.SUCCESS)
     except Exception as e:
         Console.log(f"Не удалось получить файл: {e}", LogLevel.ERROR)
         return
